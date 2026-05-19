@@ -1,0 +1,217 @@
+---
+title: "Build a RAG App with Next.js and Pinecone"
+description: "Learn how to build a retrieval-augmented generation app that answers questions from your own documents using Next.js, Pinecone, and the OpenAI API."
+date: "2026-05-08"
+tags: ["rag", "pinecone", "openai", "nextjs"]
+---
+
+RAG (Retrieval-Augmented Generation) lets you give an LLM access to your own data — docs, PDFs, knowledge bases — without fine-tuning. Here's how to build one from scratch.
+
+## How RAG Works
+
+1. **Ingest**: Split your documents into chunks and convert them to embeddings
+2. **Store**: Save those embeddings in a vector database (Pinecone)
+3. **Query**: When a user asks a question, find the most relevant chunks
+4. **Generate**: Pass those chunks as context to the LLM and return the answer
+
+## Install Dependencies
+
+```bash
+npm install @pinecone-database/pinecone openai ai
+```
+
+## Set Up Pinecone
+
+Create a free account at [pinecone.io](https://pinecone.io), create an index with:
+
+- **Dimensions**: 1536 (for `text-embedding-ada-002`)
+- **Metric**: cosine
+
+Add to `.env.local`:
+
+```bash
+OPENAI_API_KEY=sk-...
+PINECONE_API_KEY=...
+PINECONE_INDEX=your-index-name
+```
+
+## Step 1 — Ingest Documents
+
+Create `scripts/ingest.ts` to chunk and embed your docs:
+
+```typescript
+import { Pinecone } from "@pinecone-database/pinecone";
+import OpenAI from "openai";
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY! });
+
+function chunkText(text: string, size = 500): string[] {
+  const sentences = text.split(/(?<=[.?!])\s+/);
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const sentence of sentences) {
+    if ((current + sentence).length > size) {
+      chunks.push(current.trim());
+      current = sentence;
+    } else {
+      current += " " + sentence;
+    }
+  }
+  if (current) chunks.push(current.trim());
+  return chunks;
+}
+
+async function ingest(text: string, docId: string) {
+  const index = pinecone.index(process.env.PINECONE_INDEX!);
+  const chunks = chunkText(text);
+
+  const embeddings = await openai.embeddings.create({
+    model: "text-embedding-ada-002",
+    input: chunks,
+  });
+
+  const vectors = embeddings.data.map((e, i) => ({
+    id: `${docId}-${i}`,
+    values: e.embedding,
+    metadata: { text: chunks[i], docId },
+  }));
+
+  await index.upsert(vectors);
+  console.log(`Ingested ${vectors.length} chunks from ${docId}`);
+}
+
+// Example usage
+ingest("Your document text here...", "doc-001");
+```
+
+Run it once to populate your index:
+
+```bash
+npx tsx scripts/ingest.ts
+```
+
+## Step 2 — Query API Route
+
+Create `app/api/rag/route.ts`:
+
+```typescript
+import { Pinecone } from "@pinecone-database/pinecone";
+import OpenAI from "openai";
+import { OpenAIStream, StreamingTextResponse } from "ai";
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const pinecone = new Pinecone({ apiKey: process.env.PINECONE_API_KEY! });
+
+export async function POST(req: Request) {
+  const { question } = await req.json();
+
+  // 1. Embed the question
+  const embedding = await openai.embeddings.create({
+    model: "text-embedding-ada-002",
+    input: question,
+  });
+
+  // 2. Find relevant chunks
+  const index = pinecone.index(process.env.PINECONE_INDEX!);
+  const results = await index.query({
+    vector: embedding.data[0].embedding,
+    topK: 5,
+    includeMetadata: true,
+  });
+
+  const context = results.matches
+    .map((m) => m.metadata?.text)
+    .filter(Boolean)
+    .join("\n\n");
+
+  // 3. Generate answer with context
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    stream: true,
+    messages: [
+      {
+        role: "system",
+        content: `Answer questions using only the context below. If the answer isn't in the context, say so.\n\nContext:\n${context}`,
+      },
+      { role: "user", content: question },
+    ],
+  });
+
+  return new StreamingTextResponse(OpenAIStream(response));
+}
+```
+
+## Step 3 — UI
+
+Create `app/rag/page.tsx`:
+
+```typescript
+'use client'
+
+import { useState } from 'react'
+
+export default function RAGPage() {
+  const [question, setQuestion] = useState('')
+  const [answer, setAnswer] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  async function ask() {
+    setLoading(true)
+    setAnswer('')
+
+    const res = await fetch('/api/rag', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    })
+
+    const reader = res.body!.getReader()
+    const decoder = new TextDecoder()
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      setAnswer((prev) => prev + decoder.decode(value))
+    }
+
+    setLoading(false)
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto p-6">
+      <h1 className="font-display text-3xl font-bold mb-6">Ask your docs</h1>
+      <div className="flex gap-3 mb-6">
+        <input
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && ask()}
+          placeholder="Ask a question..."
+          className="flex-1 border rounded-lg px-4 py-2 focus:outline-none focus:ring-2"
+        />
+        <button onClick={ask} disabled={loading} className="btn-primary">
+          {loading ? 'Thinking...' : 'Ask'}
+        </button>
+      </div>
+      {answer && (
+        <div className="bg-cream-dark rounded-xl p-5 text-ink-muted leading-relaxed whitespace-pre-wrap">
+          {answer}
+        </div>
+      )}
+    </div>
+  )
+}
+```
+
+## Costs to Keep in Mind
+
+- **Embeddings**: `text-embedding-ada-002` is ~$0.10/1M tokens — essentially free
+- **Pinecone free tier**: 1 index, 100k vectors — plenty to start
+- **Chat**: `gpt-4o-mini` keeps costs low for Q&A use cases
+
+## What to Try Next
+
+- Ingest PDFs using `pdf-parse`
+- Add source citations by returning `metadata.docId` alongside the answer
+- Cache embeddings to avoid re-embedding the same content

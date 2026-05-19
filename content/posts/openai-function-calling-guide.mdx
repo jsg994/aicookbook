@@ -1,0 +1,217 @@
+---
+title: "OpenAI Function Calling: A Practical Guide with Examples"
+description: "Learn how to use OpenAI function calling to let your LLM trigger real actions in your app — with working TypeScript examples."
+date: "2024-05-22"
+tags: ["openai", "function-calling", "typescript"]
+---
+
+Function calling lets GPT do more than generate text — it can trigger actions in your app, call APIs, query databases, or return structured data. Here's how it works in practice.
+
+## What Problem Does It Solve?
+
+Without function calling, extracting structured data from an LLM is fragile. You prompt it to "respond in JSON" and hope it doesn't hallucinate extra text around it.
+
+With function calling, you define a schema and the model is guaranteed to return data that matches it. No parsing hacks needed.
+
+## Basic Setup
+
+```typescript
+import OpenAI from "openai";
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const tools = [
+  {
+    type: "function" as const,
+    function: {
+      name: "get_weather",
+      description: "Get the current weather for a city",
+      parameters: {
+        type: "object",
+        properties: {
+          city: {
+            type: "string",
+            description: 'The city name, e.g. "San Francisco"',
+          },
+          unit: {
+            type: "string",
+            enum: ["celsius", "fahrenheit"],
+          },
+        },
+        required: ["city"],
+      },
+    },
+  },
+];
+
+const response = await openai.chat.completions.create({
+  model: "gpt-4o",
+  messages: [{ role: "user", content: "What is the weather in Tokyo?" }],
+  tools,
+  tool_choice: "auto",
+});
+
+const message = response.choices[0].message;
+
+if (message.tool_calls) {
+  const call = message.tool_calls[0];
+  const args = JSON.parse(call.function.arguments);
+  console.log(args); // { city: 'Tokyo', unit: undefined }
+}
+```
+
+## Handling the Full Loop
+
+The model doesn't call the function itself — it tells you what to call and with what arguments. You run the function, then pass the result back:
+
+```typescript
+async function chat(userMessage: string) {
+  const messages: OpenAI.ChatCompletionMessageParam[] = [
+    { role: "user", content: userMessage },
+  ];
+
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o",
+    messages,
+    tools,
+    tool_choice: "auto",
+  });
+
+  const message = response.choices[0].message;
+
+  // No function call — return text directly
+  if (!message.tool_calls) {
+    return message.content;
+  }
+
+  // Execute each tool call
+  const toolResults = await Promise.all(
+    message.tool_calls.map(async (call) => {
+      const args = JSON.parse(call.function.arguments);
+      const result = await executeFunction(call.function.name, args);
+      return {
+        tool_call_id: call.id,
+        role: "tool" as const,
+        content: JSON.stringify(result),
+      };
+    }),
+  );
+
+  // Send results back to get a final response
+  const finalResponse = await openai.chat.completions.create({
+    model: "gpt-4o",
+    messages: [...messages, message, ...toolResults],
+    tools,
+  });
+
+  return finalResponse.choices[0].message.content;
+}
+
+async function executeFunction(name: string, args: Record<string, string>) {
+  if (name === "get_weather") {
+    // Call your actual weather API here
+    return { temperature: 18, condition: "Cloudy", city: args.city };
+  }
+  throw new Error(`Unknown function: ${name}`);
+}
+```
+
+## Extracting Structured Data
+
+This is the killer use case. Use function calling to reliably parse unstructured text:
+
+```typescript
+const extractTools = [
+  {
+    type: "function" as const,
+    function: {
+      name: "extract_contact",
+      description: "Extract contact information from text",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          email: { type: "string" },
+          phone: { type: "string" },
+          company: { type: "string" },
+        },
+        required: ["name"],
+      },
+    },
+  },
+];
+
+const text = `
+  Hi, I'm Sarah Chen from Acme Corp. 
+  Reach me at sarah@acme.com or 415-555-0123.
+`;
+
+const res = await openai.chat.completions.create({
+  model: "gpt-4o-mini",
+  messages: [{ role: "user", content: `Extract contact info from: ${text}` }],
+  tools: extractTools,
+  tool_choice: { type: "function", function: { name: "extract_contact" } },
+});
+
+const contact = JSON.parse(
+  res.choices[0].message.tool_calls![0].function.arguments,
+);
+// { name: 'Sarah Chen', email: 'sarah@acme.com', phone: '415-555-0123', company: 'Acme Corp' }
+```
+
+Notice `tool_choice` is set to force a specific function — this guarantees the model always calls it rather than deciding to respond with text instead.
+
+## Multiple Tools
+
+Give the model several tools and let it pick the right one:
+
+```typescript
+const tools = [
+  {
+    type: "function" as const,
+    function: {
+      name: "search_docs",
+      description: "Search the documentation for a query",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
+      name: "create_ticket",
+      description: "Create a support ticket for a user issue",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          description: { type: "string" },
+          priority: { type: "string", enum: ["low", "medium", "high"] },
+        },
+        required: ["title", "description", "priority"],
+      },
+    },
+  },
+];
+```
+
+The model will call `search_docs` for questions and `create_ticket` when someone reports a problem — no routing logic on your end.
+
+## Common Mistakes
+
+**Vague descriptions**: The model uses your `description` fields to decide when to call a function. Be specific — "Get the current weather for a city" beats "Get weather".
+
+**Missing required fields**: If a field is truly required, put it in `required`. Otherwise the model may omit it and your code will throw.
+
+**Not handling parallel calls**: GPT-4o can return multiple `tool_calls` in one response. Always loop over `message.tool_calls`, don't assume there's only one.
+
+## What to Build With This
+
+- Customer support bots that can look up orders, create tickets, and issue refunds
+- Data extraction pipelines that parse emails, PDFs, or form submissions into structured records
+- AI assistants that can query your database or call your internal APIs

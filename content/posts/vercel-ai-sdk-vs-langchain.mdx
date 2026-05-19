@@ -1,0 +1,171 @@
+---
+title: "Vercel AI SDK vs LangChain: Which Should You Use?"
+description: "A practical comparison of the Vercel AI SDK and LangChain for building AI-powered apps in Next.js — when each makes sense and when to avoid them."
+date: "2024-06-05"
+tags: ["vercel", "langchain", "sdk", "comparison"]
+---
+
+Both tools help you build LLM-powered apps, but they solve different problems. Picking the wrong one adds real friction. Here's the honest breakdown.
+
+## TL;DR
+
+|                          | Vercel AI SDK                    | LangChain                      |
+| ------------------------ | -------------------------------- | ------------------------------ |
+| **Best for**             | Streaming UI, Next.js apps       | Complex pipelines, agents, RAG |
+| **Learning curve**       | Low                              | High                           |
+| **Bundle size**          | Small                            | Large                          |
+| **Streaming**            | First-class                      | Supported but clunky           |
+| **Provider support**     | OpenAI, Anthropic, Mistral, etc. | Everything                     |
+| **Abstractions**         | Thin                             | Heavy                          |
+| **Production stability** | Solid                            | Inconsistent                   |
+
+## Vercel AI SDK
+
+The AI SDK is purpose-built for frontend-connected AI. Its killer feature is the `useChat` and `useCompletion` hooks — they handle streaming, state, and loading out of the box.
+
+```bash
+npm install ai openai
+```
+
+```typescript
+// app/api/chat/route.ts
+import { openai } from "@ai-sdk/openai";
+import { streamText } from "ai";
+
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+
+  const result = await streamText({
+    model: openai("gpt-4o-mini"),
+    messages,
+  });
+
+  return result.toDataStreamResponse();
+}
+```
+
+```typescript
+// app/chat/page.tsx
+'use client'
+import { useChat } from 'ai/react'
+
+export default function Chat() {
+  const { messages, input, handleInputChange, handleSubmit } = useChat()
+
+  return (
+    <div>
+      {messages.map((m) => (
+        <div key={m.id}>{m.content}</div>
+      ))}
+      <form onSubmit={handleSubmit}>
+        <input value={input} onChange={handleInputChange} />
+        <button type="submit">Send</button>
+      </form>
+    </div>
+  )
+}
+```
+
+That's a complete streaming chat UI. The SDK handles reconnection, error states, and the streaming protocol. Switching providers is a one-line change.
+
+### Use the AI SDK when:
+
+- You're building a Next.js app with a chat or completion UI
+- Streaming UX matters
+- You want minimal abstraction and full control
+- You're just getting started
+
+## LangChain
+
+LangChain is a framework for building LLM pipelines. It shines when your AI logic is complex — multiple steps, memory, tool use, document retrieval.
+
+```bash
+npm install langchain @langchain/openai
+```
+
+```typescript
+import { ChatOpenAI } from "@langchain/openai";
+import { ConversationChain } from "langchain/chains";
+import { BufferMemory } from "langchain/memory";
+
+const model = new ChatOpenAI({ model: "gpt-4o-mini" });
+const memory = new BufferMemory();
+
+const chain = new ConversationChain({ llm: model, memory });
+
+const res1 = await chain.call({ input: "My name is Alex." });
+const res2 = await chain.call({ input: "What is my name?" });
+// Correctly returns "Alex" because of memory
+```
+
+Where LangChain really earns its keep is RAG pipelines:
+
+```typescript
+import { OpenAIEmbeddings } from "@langchain/openai";
+import { MemoryVectorStore } from "langchain/vectorstores/memory";
+import { RetrievalQAChain } from "langchain/chains";
+import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
+
+const splitter = new RecursiveCharacterTextSplitter({
+  chunkSize: 500,
+  chunkOverlap: 50,
+});
+
+const docs = await splitter.createDocuments([yourLongDocument]);
+const vectorStore = await MemoryVectorStore.fromDocuments(
+  docs,
+  new OpenAIEmbeddings(),
+);
+
+const chain = RetrievalQAChain.fromLLM(
+  new ChatOpenAI({ model: "gpt-4o-mini" }),
+  vectorStore.asRetriever(),
+);
+
+const result = await chain.call({
+  query: "What does the document say about X?",
+});
+```
+
+That's chunking, embedding, storing, and retrieval in ~15 lines.
+
+### Use LangChain when:
+
+- You're building RAG pipelines
+- You need conversation memory across sessions
+- You're building agents with multiple tools
+- You need to chain multiple LLM calls together
+
+## The Honest Downsides
+
+**Vercel AI SDK** is thin by design. If you need agents, memory, or document pipelines, you're writing it yourself. It's also Vercel-ecosystem-flavored — works great with Next.js, less natural elsewhere.
+
+**LangChain** has a reputation for a reason. The abstractions can leak badly, docs lag behind breaking changes, and debugging a chain gone wrong is painful. Many teams use it to get started and gradually replace it with direct API calls as they understand their use case better.
+
+## Can You Use Both?
+
+Yes, and it's actually common. Use the AI SDK for your streaming chat UI, and call a LangChain-powered RAG endpoint for document Q&A. They don't conflict.
+
+```typescript
+// The AI SDK handles streaming to the browser
+// LangChain handles the retrieval logic on the server
+
+export async function POST(req: Request) {
+  const { query } = await req.json();
+
+  // LangChain does the RAG work
+  const result = await ragChain.call({ query });
+
+  // AI SDK streams the response
+  const stream = await streamText({
+    model: openai("gpt-4o-mini"),
+    prompt: `Answer based on this context: ${result.text}\n\nQuestion: ${query}`,
+  });
+
+  return stream.toDataStreamResponse();
+}
+```
+
+## My Recommendation
+
+Start with the **Vercel AI SDK**. It's simpler, the DX is better, and it covers 80% of use cases cleanly. Add LangChain only when you hit something it genuinely can't do — usually that means RAG or stateful agents. By that point you'll know exactly why you need it.

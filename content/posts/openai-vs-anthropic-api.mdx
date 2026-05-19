@@ -1,0 +1,124 @@
+---
+title: "OpenAI API vs Anthropic API: Which Should You Use?"
+description: "A practical comparison of the OpenAI and Anthropic APIs for developers — covering pricing, context windows, strengths, and when to pick each one."
+date: "2026-04-15"
+tags: ["openai", "anthropic", "llm", "comparison"]
+---
+
+Both APIs are excellent. The real question is which one fits your use case. Here's a no-hype breakdown from a developer's perspective.
+
+## TL;DR
+
+|                      | OpenAI (GPT-4o)                     | Anthropic (Claude 3.5 Sonnet)      |
+| -------------------- | ----------------------------------- | ---------------------------------- |
+| **Best for**         | Broad general use, function calling | Long docs, coding, nuanced writing |
+| **Context window**   | 128k tokens                         | 200k tokens                        |
+| **Input price**      | $5/1M tokens                        | $3/1M tokens                       |
+| **Output price**     | $15/1M tokens                       | $15/1M tokens                      |
+| **Streaming**        | ✅                                  | ✅                                 |
+| **Function calling** | ✅ Mature                           | ✅ Good                            |
+| **Vision**           | ✅                                  | ✅                                 |
+| **JSON mode**        | ✅ Native                           | Via prompting                      |
+
+## API Setup
+
+Both are straightforward. OpenAI:
+
+```bash
+npm install openai
+```
+
+```typescript
+import OpenAI from "openai";
+
+const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const response = await client.chat.completions.create({
+  model: "gpt-4o",
+  messages: [{ role: "user", content: "Hello!" }],
+});
+```
+
+Anthropic:
+
+```bash
+npm install @anthropic-ai/sdk
+```
+
+```typescript
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+const response = await client.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 1024,
+  messages: [{ role: "user", content: "Hello!" }],
+});
+```
+
+The main structural difference: Anthropic separates `system` from `messages`, while OpenAI puts everything in the messages array.
+
+## When to Pick OpenAI
+
+**Function calling / tool use** — OpenAI's function calling is battle-tested and has better ecosystem support (LangChain, LlamaIndex, etc. target it first).
+
+**JSON mode** — Pass `response_format: { type: 'json_object' }` and GPT-4o will always return valid JSON. Anthropic requires you to prompt for it.
+
+**Wider model range** — GPT-4o mini is a great cheap model for simple tasks. Whisper (speech-to-text) and DALL-E (image generation) are in the same API.
+
+**Ecosystem maturity** — Most tutorials, SDKs, and starter kits target OpenAI first.
+
+## When to Pick Anthropic
+
+**Long documents** — Claude's 200k context window (vs 128k) matters when you're processing books, codebases, or long transcripts.
+
+**Coding tasks** — Claude 3.5 Sonnet consistently scores at the top of coding benchmarks. It's particularly strong at understanding and refactoring existing code.
+
+**Writing quality** — Claude tends to produce more natural, less robotic prose. Worth testing side-by-side if output quality matters for your product.
+
+**Instruction following** — Claude is notably good at following complex, multi-step instructions without drifting.
+
+## Streaming — Both Work the Same Way
+
+OpenAI:
+
+```typescript
+const stream = await client.chat.completions.create({
+  model: "gpt-4o",
+  stream: true,
+  messages,
+});
+
+for await (const chunk of stream) {
+  process.stdout.write(chunk.choices[0]?.delta?.content ?? "");
+}
+```
+
+Anthropic:
+
+```typescript
+const stream = await client.messages.stream({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 1024,
+  messages,
+});
+
+for await (const chunk of stream) {
+  if (chunk.type === "content_block_delta") {
+    process.stdout.write(chunk.delta.text);
+  }
+}
+```
+
+## The Honest Answer
+
+For most new projects, **start with whichever you have credits for** and switch if you hit a wall. The APIs are close enough in capability that the decision rarely matters early on.
+
+The exceptions:
+
+- Processing very long documents → Anthropic
+- Heavy tool/function calling → OpenAI
+- Matching an existing codebase → use what's already there
+
+Run evals on your actual use case before committing either way. A benchmark that matters is one you ran yourself.

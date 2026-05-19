@@ -1,0 +1,153 @@
+---
+title: "How to Stream OpenAI Responses in Next.js (App Router)"
+description: "A complete guide to streaming LLM responses to the browser using Next.js App Router, the Vercel AI SDK, and the OpenAI API — with real working code."
+date: "2026-04-8"
+tags: ["nextjs", "openai", "streaming", "app-router"]
+---
+
+Streaming makes your AI-powered UI feel instant. Instead of waiting 5-10 seconds for a full response, users see text appear word-by-word — just like ChatGPT. Here's exactly how to build it in Next.js.
+
+## What We're Building
+
+A simple chat interface that:
+
+- Sends a user message to the OpenAI API
+- Streams the response token-by-token to the browser
+- Handles errors gracefully
+
+## Prerequisites
+
+- Next.js 14+ with App Router
+- An OpenAI API key
+- Basic familiarity with React hooks
+
+## Install Dependencies
+
+```bash
+npm install ai openai
+```
+
+We're using the [Vercel AI SDK](https://sdk.vercel.ai) — it handles the streaming plumbing so you don't have to.
+
+## Create the API Route
+
+Create `app/api/chat/route.ts`:
+
+```typescript
+import OpenAI from "openai";
+import { OpenAIStream, StreamingTextResponse } from "ai";
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    stream: true,
+    messages,
+  });
+
+  const stream = OpenAIStream(response);
+  return new StreamingTextResponse(stream);
+}
+```
+
+That's the whole backend. The `StreamingTextResponse` handles the correct headers and encoding automatically.
+
+## Build the Chat UI
+
+Create `app/chat/page.tsx`:
+
+```typescript
+'use client'
+
+import { useChat } from 'ai/react'
+
+export default function ChatPage() {
+  const { messages, input, handleInputChange, handleSubmit, isLoading } = useChat()
+
+  return (
+    <div className="max-w-2xl mx-auto p-6">
+      <div className="space-y-4 mb-6 min-h-[400px]">
+        {messages.map((m) => (
+          <div
+            key={m.id}
+            className={`p-4 rounded-lg ${
+              m.role === 'user'
+                ? 'bg-blue-50 ml-8'
+                : 'bg-gray-50 mr-8'
+            }`}
+          >
+            <p className="text-sm font-semibold mb-1 capitalize">{m.role}</p>
+            <p className="text-gray-700 whitespace-pre-wrap">{m.content}</p>
+          </div>
+        ))}
+        {isLoading && (
+          <div className="bg-gray-50 rounded-lg p-4 mr-8">
+            <div className="animate-pulse text-gray-400">Thinking...</div>
+          </div>
+        )}
+      </div>
+
+      <form onSubmit={handleSubmit} className="flex gap-3">
+        <input
+          value={input}
+          onChange={handleInputChange}
+          placeholder="Ask anything..."
+          className="flex-1 border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+        <button
+          type="submit"
+          disabled={isLoading}
+          className="bg-black text-white px-5 py-2 rounded-lg disabled:opacity-50"
+        >
+          Send
+        </button>
+      </form>
+    </div>
+  )
+}
+```
+
+The `useChat` hook from the Vercel AI SDK manages all the state for you — messages, loading state, and form handling.
+
+## Environment Variables
+
+Add to `.env.local`:
+
+```bash
+OPENAI_API_KEY=sk-...
+```
+
+And add to `.gitignore` if it isn't already:
+
+```bash
+.env.local
+```
+
+## Test It
+
+```bash
+npm run dev
+```
+
+Navigate to `http://localhost:3000/chat` and you should see streaming responses immediately.
+
+## Common Gotchas
+
+**Rate limits**: OpenAI will 429 you under heavy load. Add a retry with exponential backoff in production, or use the `openai` client's built-in retry options.
+
+**Token costs**: `gpt-4o-mini` is ~$0.15/1M input tokens — fine for personal apps. Switch to `gpt-4o` only when you need it.
+
+**Edge runtime**: If you deploy to Vercel Edge Functions, make sure your route exports `export const runtime = 'edge'` for lower latency.
+
+## What's Next
+
+- Add a system prompt to give the assistant a persona
+- Persist conversations in a database (Supabase works great)
+- Add tool calling to let the AI perform actions
+
+That's it — streaming AI responses in Next.js in under 50 lines of code.

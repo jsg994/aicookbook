@@ -1,0 +1,223 @@
+---
+title: "How to Reduce LLM API Costs in Production"
+description: "Practical strategies for cutting your OpenAI and Anthropic API bills without sacrificing quality — caching, model routing, prompt compression, and more."
+date: "2024-05-29"
+tags: ["cost", "openai", "anthropic", "production"]
+---
+
+LLM API costs can spiral fast once you have real traffic. Here are the techniques that actually move the needle.
+
+## Know Where Your Money Goes First
+
+Before optimizing, measure. Add logging to every API call:
+
+```typescript
+async function callLLM(prompt: string, options = {}) {
+  const start = Date.now();
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o",
+    messages: [{ role: "user", content: prompt }],
+    ...options,
+  });
+
+  const usage = response.usage!;
+  const cost =
+    (usage.prompt_tokens * 5 + usage.completion_tokens * 15) / 1_000_000;
+
+  console.log({
+    prompt_tokens: usage.prompt_tokens,
+    completion_tokens: usage.completion_tokens,
+    cost_usd: cost.toFixed(6),
+    latency_ms: Date.now() - start,
+  });
+
+  return response;
+}
+```
+
+Run this for a week and you'll almost always find one or two call types burning 80% of your budget.
+
+## 1. Route to Cheaper Models
+
+Not every task needs GPT-4o. Build a simple router:
+
+```typescript
+type TaskComplexity = "simple" | "moderate" | "complex";
+
+function selectModel(complexity: TaskComplexity): string {
+  const models = {
+    simple: "gpt-4o-mini", // $0.15/$0.60 per 1M tokens
+    moderate: "gpt-4o-mini", // good enough for most things
+    complex: "gpt-4o", // $5/$15 per 1M tokens — use sparingly
+  };
+  return models[complexity];
+}
+
+// Simple classification, summarization, extraction → mini
+// Complex reasoning, code generation, nuanced writing → 4o
+```
+
+Switching even 70% of calls to `gpt-4o-mini` typically cuts costs by 60-80%.
+
+## 2. Cache Responses
+
+Identical or near-identical prompts are a huge source of waste. Cache aggressively:
+
+```typescript
+import { createClient } from "redis";
+
+const redis = createClient({ url: process.env.REDIS_URL });
+
+async function cachedLLMCall(prompt: string, ttlSeconds = 3600) {
+  const key = `llm:${Buffer.from(prompt).toString("base64").slice(0, 64)}`;
+
+  const cached = await redis.get(key);
+  if (cached) return JSON.parse(cached);
+
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  await redis.setEx(key, ttlSeconds, JSON.stringify(response));
+  return response;
+}
+```
+
+Good candidates for caching: FAQ answers, product descriptions, static classifications. Bad candidates: anything personalized or time-sensitive.
+
+## 3. Compress Your Prompts
+
+System prompts are paid on every request. Audit yours:
+
+```typescript
+// Before: 800 tokens
+const systemPrompt = `
+  You are a helpful customer support assistant for Acme Corporation.
+  Your job is to help customers with their questions and concerns.
+  Always be polite and professional. Never be rude or dismissive.
+  If you don't know the answer, say so and offer to escalate.
+  Always sign off with "Best, The Acme Support Team".
+  Do not discuss competitor products...
+  [continues for 600 more tokens]
+`;
+
+// After: 120 tokens — same behavior
+const systemPrompt = `
+  Customer support for Acme Corp. Be concise and helpful.
+  Escalate unknowns. Sign off: "Best, The Acme Support Team".
+  No competitor discussion.
+`;
+```
+
+Use `tiktoken` to measure your prompts:
+
+```bash
+npm install js-tiktoken
+```
+
+```typescript
+import { encodingForModel } from "js-tiktoken";
+
+const enc = encodingForModel("gpt-4o");
+const tokens = enc.encode(systemPrompt).length;
+console.log(`System prompt: ${tokens} tokens`);
+```
+
+## 4. Set max_tokens Aggressively
+
+By default, the model can generate up to its full context window. If your use case only needs short responses, cap it:
+
+```typescript
+// For classification tasks
+const response = await openai.chat.completions.create({
+  model: "gpt-4o-mini",
+  messages,
+  max_tokens: 10, // "positive", "negative", "neutral" — done
+});
+
+// For summaries
+const response = await openai.chat.completions.create({
+  model: "gpt-4o-mini",
+  messages,
+  max_tokens: 200,
+});
+```
+
+Output tokens cost 3-5x more than input tokens, so cutting unused generation saves real money.
+
+## 5. Batch Non-Urgent Requests
+
+OpenAI's Batch API gives you 50% off for async workloads — anything that doesn't need to be real-time:
+
+```typescript
+import fs from "fs";
+
+// Build a batch file
+const requests = items.map((item, i) => ({
+  custom_id: `request-${i}`,
+  method: "POST",
+  url: "/v1/chat/completions",
+  body: {
+    model: "gpt-4o-mini",
+    messages: [{ role: "user", content: item.prompt }],
+    max_tokens: 500,
+  },
+}));
+
+fs.writeFileSync(
+  "batch.jsonl",
+  requests.map((r) => JSON.stringify(r)).join("\n"),
+);
+
+// Upload and create batch
+const file = await openai.files.create({
+  file: fs.createReadStream("batch.jsonl"),
+  purpose: "batch",
+});
+
+const batch = await openai.batches.create({
+  input_file_id: file.id,
+  endpoint: "/v1/chat/completions",
+  completion_window: "24h",
+});
+
+console.log("Batch ID:", batch.id);
+```
+
+Great for: nightly data processing, bulk classification, generating SEO content, embedding generation.
+
+## 6. Use Prompt Caching (Anthropic)
+
+Anthropic charges only 10% of the normal input token price for cached prompt prefixes. If you have a long system prompt that doesn't change, this is free money:
+
+```typescript
+const response = await anthropic.messages.create({
+  model: "claude-sonnet-4-20250514",
+  max_tokens: 1024,
+  system: [
+    {
+      type: "text",
+      text: yourLongSystemPrompt,
+      cache_control: { type: "ephemeral" }, // Cache this prefix
+    },
+  ],
+  messages: [{ role: "user", content: userMessage }],
+});
+```
+
+The cache lasts 5 minutes and resets on each hit. For apps with frequent requests and stable system prompts, this alone can cut costs by 40-60%.
+
+## Realistic Impact
+
+On a typical app spending $500/month:
+
+| Optimization               | Estimated Saving |
+| -------------------------- | ---------------- |
+| Route 70% of calls to mini | $250-350         |
+| Cache 30% of responses     | $50-100          |
+| Compress system prompts    | $20-50           |
+| Set max_tokens properly    | $30-60           |
+| Batch non-urgent work      | $40-80           |
+
+Most apps can hit the same quality at 20-30% of the original cost with a week of focused optimization.
