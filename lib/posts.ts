@@ -1,9 +1,9 @@
 import "server-only";
 import fs from "fs";
-import path from "path";
+import { join } from "path";
 import matter from "gray-matter";
 
-const postsDirectory = path.join(process.cwd(), "content/posts");
+const postsDirectory = join(process.cwd(), "content/posts");
 
 export type Post = {
   slug: string;
@@ -33,7 +33,7 @@ export function getAllPosts(): PostMeta[] {
     .filter((fn) => fn.endsWith(".mdx") || fn.endsWith(".md"))
     .map((fileName) => {
       const slug = fileName.replace(/\.(mdx|md)$/, "");
-      const fullPath = path.join(postsDirectory, fileName);
+      const fullPath = join(postsDirectory, fileName);
       const fileContents = fs.readFileSync(fullPath, "utf8");
       const { data, content } = matter(fileContents);
 
@@ -54,8 +54,8 @@ export function getAllPosts(): PostMeta[] {
 }
 
 export function getPostBySlug(slug: string): Post | null {
-  const mdxPath = path.join(postsDirectory, `${slug}.mdx`);
-  const mdPath = path.join(postsDirectory, `${slug}.md`);
+  const mdxPath = join(postsDirectory, `${slug}.mdx`);
+  const mdPath = join(postsDirectory, `${slug}.md`);
   const fullPath = fs.existsSync(mdxPath) ? mdxPath : mdPath;
 
   if (!fs.existsSync(fullPath)) return null;
