@@ -1,7 +1,6 @@
 import { ImageResponse } from "next/og";
-import { getPostBySlug, getAllPosts } from "@/lib/posts";
+import { getAllPosts, getPostBySlug } from "@/lib/posts";
 
-export const runtime = "edge";
 export const alt = "AI Cookbook";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
@@ -30,7 +29,6 @@ export default function OGImage({ params }: { params: { slug: string } }) {
         fontFamily: "serif",
       }}
     >
-      {/* Top label */}
       <div
         style={{
           display: "flex",
@@ -45,7 +43,6 @@ export default function OGImage({ params }: { params: { slug: string } }) {
         </span>
       </div>
 
-      {/* Title */}
       <div
         style={{
           fontSize: title.length > 50 ? 48 : 56,
@@ -59,7 +56,6 @@ export default function OGImage({ params }: { params: { slug: string } }) {
         {title}
       </div>
 
-      {/* Tags */}
       {tags.length > 0 && (
         <div style={{ display: "flex", gap: 12 }}>
           {tags.slice(0, 4).map((tag) => (
@@ -80,7 +76,6 @@ export default function OGImage({ params }: { params: { slug: string } }) {
         </div>
       )}
 
-      {/* Bottom URL */}
       <div
         style={{
           position: "absolute",
