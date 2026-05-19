@@ -6,6 +6,7 @@ import { MDXRemote } from "next-mdx-remote/rsc";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import rehypeSlug from "rehype-slug";
+import { mdxComponents } from "@/components/MDXComponents";
 
 type Props = {
   params: { slug: string };
@@ -45,6 +46,31 @@ export default function PostPage({ params }: Props) {
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-12">
       <div className="max-w-3xl mx-auto">
+        {/* JSON-LD structured data */}
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              "@context": "https://schema.org",
+              "@type": "TechArticle",
+              headline: post.title,
+              description: post.description,
+              datePublished: post.date,
+              author: {
+                "@type": "Organization",
+                name: "AI Cookbook",
+                url: "https://aicookbook.dev",
+              },
+              publisher: {
+                "@type": "Organization",
+                name: "AI Cookbook",
+                url: "https://aicookbook.dev",
+              },
+              url: `https://aicookbook.dev/posts/${post.slug}`,
+            }),
+          }}
+        />
+
         <Link
           href="/posts"
           className="inline-flex items-center gap-1 text-sm text-ink-muted hover:text-ink mb-8 transition-colors"
@@ -97,7 +123,11 @@ export default function PostPage({ params }: Props) {
           prose-th:text-ink prose-th:font-semibold
           prose-td:text-ink-muted"
         >
-          <MDXRemote source={post.content} options={mdxOptions} />
+          <MDXRemote
+            source={post.content}
+            options={mdxOptions}
+            components={mdxComponents}
+          />
         </div>
 
         <div className="border-t border-ink/10 mt-16 pt-8">
